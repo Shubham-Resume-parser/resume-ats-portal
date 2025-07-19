@@ -2,3 +2,7 @@ fastapi
 uvicorn
 pdfplumber
 python-multipart
+sentence-transformers
+scikit-learn
+transformers
+torch
