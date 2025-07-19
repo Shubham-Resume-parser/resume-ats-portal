@@ -1,14 +1,11 @@
-# ats_dual_model_pipeline.py
-
 from fastapi import FastAPI, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import pdfplumber
-import tempfile
 from sentence_transformers import SentenceTransformer, util
-from sklearn.metrics.pairwise import cosine_similarity
+from transformers import pipeline
 import torch
-import re
+import json
 
 app = FastAPI()
 
@@ -19,63 +16,58 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load Semantic Similarity Model
-embedding_model = SentenceTransformer('BAAI/bge-large-en-v1.5')
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Basic skills list (can be replaced with LLM or extended list)
-skill_keywords = [
-    "python", "java", "c++", "sql", "excel", "machine learning", "data analysis",
-    "communication", "project management", "aws", "docker", "linux", "git",
-    "react", "node.js", "nlp", "deep learning", "api", "flask", "fastapi"
-]
-
-
-def extract_text_from_pdf(file):
-    with pdfplumber.open(file) as pdf:
-        return "\n".join(
-            page.extract_text() for page in pdf.pages if page.extract_text()
-        )
-
-
-def clean_text(text):
-    return re.sub(r"[^a-zA-Z0-9\s]", "", text.lower())
-
-
-def extract_skills_from_text(text):
-    text = clean_text(text)
-    return [skill for skill in skill_keywords if skill in text]
-
-
-def get_embedding(text):
-    return embedding_model.encode(text, convert_to_tensor=True)
-
-
-def score_resume_pipeline(resume_text, jd_text):
-    resume_skills = extract_skills_from_text(resume_text)
-    jd_skills = extract_skills_from_text(jd_text)
-
-    # Semantic similarity
-    resume_embedding = get_embedding(resume_text)
-    jd_embedding = get_embedding(jd_text)
-    similarity_score = float(util.cos_sim(resume_embedding, jd_embedding)[0])
-
-    matched_skills = list(set(resume_skills) & set(jd_skills))
-    skill_match_score = len(matched_skills) / max(len(jd_skills), 1)
-
-    ats_score = round((0.7 * similarity_score + 0.3 * skill_match_score) * 100)
-
-    return {
-        "ATS_Score": ats_score,
-        "Strengths": matched_skills,
-        "Gaps": list(set(jd_skills) - set(matched_skills)),
-        "Recommendation": "Well aligned" if ats_score > 75 else "Needs improvement"
-    }
-
+# Retain flan-alpaca-large as per request
+skill_extraction_pipeline = pipeline("text2text-generation", model="declare-lab/flan-alpaca-large")
 
 @app.get("/")
 async def root():
     return JSONResponse(content={"status": "Backend is live"}, status_code=200)
 
+def extract_text_from_pdf(uploaded_file):
+    with pdfplumber.open(uploaded_file) as pdf:
+        return "".join(page.extract_text() for page in pdf.pages if page.extract_text())
+
+def extract_skills_with_llm(resume_text, job_text):
+    resume_embedding = model.encode(resume_text, convert_to_tensor=True, normalize_embeddings=True)
+    job_embedding = model.encode(job_text, convert_to_tensor=True, normalize_embeddings=True)
+
+    similarity = util.cos_sim(resume_embedding, job_embedding).item()
+
+    extracted_skills = call_local_llm_for_skills(resume_text, job_text)
+
+    return {
+        "ATS_Score": round(similarity * 100, 2),
+        "Recommendation": interpret_score(similarity),
+        "Extracted_Skills": extracted_skills
+    }
+
+def interpret_score(score):
+    if score > 0.75:
+        return "Strong Match"
+    elif score > 0.5:
+        return "Moderate Match"
+    else:
+        return "Weak Match"
+
+def call_local_llm_for_skills(resume_text, job_text):
+    prompt = (
+        "Extract technical and domain-specific skills from the resume and compare with the job description. "
+        "Provide a JSON with Matching_Skills, Missing_Skills, and Unique_Strengths.\n"
+        f"Resume:\n{resume_text}\n\n"
+        f"Job Description:\n{job_text}\n"
+    )
+
+    try:
+        result = skill_extraction_pipeline(prompt, max_new_tokens=256)[0]['generated_text']
+        json_start = result.find('{')
+        if json_start != -1:
+            return json.loads(result[json_start:])
+        else:
+            return {"error": "No JSON found in model output."}
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.post("/api/score")
 async def score_resume(
@@ -84,23 +76,17 @@ async def score_resume(
     jd_pdf: UploadFile = None
 ):
     try:
-        # Extract resume text
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(await resume.read())
-            resume_text = extract_text_from_pdf(tmp.name)
+        resume_text = extract_text_from_pdf(resume.file)
 
-        # Extract JD text from file or form
         if jd_pdf:
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp.write(await jd_pdf.read())
-                jd_text = extract_text_from_pdf(tmp.name)
+            jd_text = extract_text_from_pdf(jd_pdf.file)
         elif job_description:
             jd_text = job_description
         else:
-            return JSONResponse(status_code=400, content={"error": "JD missing."})
+            return JSONResponse(content={"error": "No job description provided."}, status_code=400)
 
-        result = score_resume_pipeline(resume_text, jd_text)
-        return JSONResponse(content=result)
+        score_result = extract_skills_with_llm(resume_text, jd_text)
 
+        return score_result
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(content={"error": str(e)}, status_code=500)
