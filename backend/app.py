@@ -12,7 +12,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.post("/score")
+@app.post("/api/score")
 async def score_resume(resume: UploadFile, job_description: str = Form(...)):
     try:
         with pdfplumber.open(resume.file) as pdf:
