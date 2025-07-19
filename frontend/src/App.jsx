@@ -20,7 +20,7 @@ function App() {
     setLoading(true);
     try {
       const response = await axios.post(
-        'https://resume-ats-portal.onrender.com/api/parse',
+        'https://resume-ats-portal.onrender.com/score',
         formData,
         {
           headers: {
