@@ -12,6 +12,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def root():
+    return JSONResponse(content={"status": "Backend is live"}, status_code=200)
+
 @app.post("/api/score")
 async def score_resume(resume: UploadFile, job_description: str = Form(...)):
     try:
