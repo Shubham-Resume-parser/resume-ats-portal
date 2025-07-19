@@ -1,16 +1,12 @@
-import React from 'react';
-import Login from './components/login/Login';
-import Dashboard from './components/dashboard/Dashboard';
-import ATSScorer from './components/ats-scorer/ATSScorer';
+import React from 'react'
 
 const App = () => {
   return (
-    <div>
-      <Login />
-      <Dashboard />
-      <ATSScorer />
+    <div style={{ padding: '2rem', fontFamily: 'Arial' }}>
+      <h1>🚀 Resume ATS Portal</h1>
+      <p>Your React frontend is working!</p>
     </div>
-  );
-};
+  )
+}
 
-export default App;
+export default App
