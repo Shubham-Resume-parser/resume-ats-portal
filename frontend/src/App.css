@@ -1,0 +1,49 @@
+
+/* App.css */
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  margin: 0;
+  padding: 0;
+  background-color: #f7f9fc;
+}
+
+.container {
+  max-width: 800px;
+  margin: 40px auto;
+  padding: 20px;
+  background: #ffffff;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+}
+
+h1 {
+  text-align: center;
+  color: #333;
+}
+
+input[type="file"] {
+  margin: 20px 0;
+  display: block;
+}
+
+button {
+  padding: 10px 20px;
+  background-color: #0052cc;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: #0041a8;
+}
+
+.result {
+  margin-top: 20px;
+  padding: 15px;
+  background-color: #e9f5e9;
+  border: 1px solid #a5d6a7;
+  border-radius: 5px;
+  color: #2e7d32;
+}
