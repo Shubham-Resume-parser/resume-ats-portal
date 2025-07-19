@@ -3,9 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import pdfplumber
 from sentence_transformers import SentenceTransformer, util
-from transformers import pipeline
 import torch
 import json
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 app = FastAPI()
 
@@ -16,10 +16,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model = SentenceTransformer('all-MiniLM-L6-v2')
+similarity_model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Retain flan-alpaca-large as per request
-skill_extraction_pipeline = pipeline("text2text-generation", model="declare-lab/flan-alpaca-large")
+# Fallback model setup
+fallback_model_name = "t5-small"
+tiny_model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+
+# Load primary model
+try:
+    llm_model_name = "google/flan-t5-base"
+    tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
+    llm_model = AutoModelForSeq2SeqLM.from_pretrained(llm_model_name)
+except Exception:
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(fallback_model_name)
+        llm_model = AutoModelForSeq2SeqLM.from_pretrained(fallback_model_name)
+        llm_model_name = fallback_model_name
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(tiny_model_name)
+        llm_model = AutoModelForSeq2SeqLM.from_pretrained(tiny_model_name)
+        llm_model_name = tiny_model_name
 
 @app.get("/")
 async def root():
@@ -30,17 +46,18 @@ def extract_text_from_pdf(uploaded_file):
         return "".join(page.extract_text() for page in pdf.pages if page.extract_text())
 
 def extract_skills_with_llm(resume_text, job_text):
-    resume_embedding = model.encode(resume_text, convert_to_tensor=True, normalize_embeddings=True)
-    job_embedding = model.encode(job_text, convert_to_tensor=True, normalize_embeddings=True)
+    resume_embedding = similarity_model.encode(resume_text, convert_to_tensor=True, normalize_embeddings=True)
+    job_embedding = similarity_model.encode(job_text, convert_to_tensor=True, normalize_embeddings=True)
 
     similarity = util.cos_sim(resume_embedding, job_embedding).item()
 
-    extracted_skills = call_local_llm_for_skills(resume_text, job_text)
+    extracted_skills = call_llm_locally(resume_text, job_text)
 
     return {
         "ATS_Score": round(similarity * 100, 2),
         "Recommendation": interpret_score(similarity),
-        "Extracted_Skills": extracted_skills
+        "Extracted_Skills": extracted_skills,
+        "Model_Used": llm_model_name
     }
 
 def interpret_score(score):
@@ -51,7 +68,7 @@ def interpret_score(score):
     else:
         return "Weak Match"
 
-def call_local_llm_for_skills(resume_text, job_text):
+def call_llm_locally(resume_text, job_text):
     prompt = (
         "Extract technical and domain-specific skills from the resume and compare with the job description. "
         "Provide a JSON with Matching_Skills, Missing_Skills, and Unique_Strengths.\n"
@@ -60,12 +77,14 @@ def call_local_llm_for_skills(resume_text, job_text):
     )
 
     try:
-        result = skill_extraction_pipeline(prompt, max_new_tokens=256)[0]['generated_text']
-        json_start = result.find('{')
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
+        outputs = llm_model.generate(**inputs, max_new_tokens=512)
+        decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+        json_start = decoded.find('{')
         if json_start != -1:
-            return json.loads(result[json_start:])
-        else:
-            return {"error": "No JSON found in model output."}
+            return json.loads(decoded[json_start:])
+        return {"error": "No valid JSON found in model output."}
     except Exception as e:
         return {"error": str(e)}
 
