@@ -5,7 +5,7 @@ import pdfplumber
 from sentence_transformers import SentenceTransformer, util
 import torch
 import json
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 
 app = FastAPI()
 
@@ -16,25 +16,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Similarity model for semantic matching
 similarity_model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Fallback model setup
-fallback_model_name = "t5-small"
+# Primary and fallback models for skill/entity extraction
+primary_model_name = "mistralai/Mistral-7B-Instruct"
+fallback_model_name = "google/flan-t5-small"
 tiny_model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
-# Load primary model
+# Try loading models with fallback logic
 try:
-    llm_model_name = "google/flan-t5-base"
-    tokenizer = AutoTokenizer.from_pretrained(llm_model_name)
-    llm_model = AutoModelForSeq2SeqLM.from_pretrained(llm_model_name)
+    llm_pipeline = pipeline("text-generation", model=primary_model_name, torch_dtype=torch.float16, device_map="auto")
+    llm_model_name = primary_model_name
 except Exception:
     try:
-        tokenizer = AutoTokenizer.from_pretrained(fallback_model_name)
-        llm_model = AutoModelForSeq2SeqLM.from_pretrained(fallback_model_name)
+        llm_pipeline = pipeline("text2text-generation", model=fallback_model_name)
         llm_model_name = fallback_model_name
     except Exception:
-        tokenizer = AutoTokenizer.from_pretrained(tiny_model_name)
-        llm_model = AutoModelForSeq2SeqLM.from_pretrained(tiny_model_name)
+        llm_pipeline = pipeline("text-generation", model=tiny_model_name)
         llm_model_name = tiny_model_name
 
 @app.get("/")
@@ -50,7 +49,6 @@ def extract_skills_with_llm(resume_text, job_text):
     job_embedding = similarity_model.encode(job_text, convert_to_tensor=True, normalize_embeddings=True)
 
     similarity = util.cos_sim(resume_embedding, job_embedding).item()
-
     extracted_skills = call_llm_locally(resume_text, job_text)
 
     return {
@@ -70,20 +68,18 @@ def interpret_score(score):
 
 def call_llm_locally(resume_text, job_text):
     prompt = (
-        "Extract technical and domain-specific skills from the resume and compare with the job description. "
-        "Provide a JSON with Matching_Skills, Missing_Skills, and Unique_Strengths.\n"
+        "You are an expert resume evaluator. Compare the resume and job description below. "
+        "Extract and return a JSON object with keys: Matching_Skills, Missing_Skills, and Unique_Strengths.\n"
         f"Resume:\n{resume_text}\n\n"
         f"Job Description:\n{job_text}\n"
+        "Respond ONLY with the JSON output."
     )
 
     try:
-        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
-        outputs = llm_model.generate(**inputs, max_new_tokens=512)
-        decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-        json_start = decoded.find('{')
+        response = llm_pipeline(prompt, max_new_tokens=512, do_sample=False)[0]["generated_text"]
+        json_start = response.find('{')
         if json_start != -1:
-            return json.loads(decoded[json_start:])
+            return json.loads(response[json_start:])
         return {"error": "No valid JSON found in model output."}
     except Exception as e:
         return {"error": str(e)}
